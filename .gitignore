@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# 원본/트리밍 영상, 키포인트 데이터는 로컬 Downloads에만 두고 저장소엔 안 넣음
+data/raw/
+data/trimmed/
+data/keypoints/
+*.mp4
+*.npy
+
+.ipynb_checkpoints/
