@@ -100,3 +100,28 @@ def normalize_by_bbox(keypoints_xy: np.ndarray, eps: float = 1e-6) -> np.ndarray
     out[..., 0] = (x - x_min) / w
     out[..., 1] = (y - y_min) / h
     return out
+
+
+def to_fixed_length(keypoints: np.ndarray, target_len: int = 30) -> np.ndarray:
+    """시간축 길이를 target_len으로 통일 (트리밍된 클립이 29~90프레임으로 제각각이라 필요).
+
+    길면 중앙 target_len 프레임만 crop, 짧으면 가장자리 프레임을 반복해서 채운다
+    (동작이 이미 시작/끝난 정지 구간을 늘리는 것이라 보간보다 이 방식이 안전).
+
+    Args:
+        keypoints: (T, ...) 형태 배열 (K,2)든 (K,3)이든 첫 축이 시간이면 됨.
+    """
+    T = keypoints.shape[0]
+    if T == target_len:
+        return keypoints.copy()
+
+    if T > target_len:
+        start = (T - target_len) // 2
+        return keypoints[start : start + target_len].copy()
+
+    # T < target_len: 앞뒤로 가장자리 프레임 반복해서 패딩
+    deficit = target_len - T
+    pad_before = deficit // 2
+    pad_after = deficit - pad_before
+    pad_width = [(pad_before, pad_after)] + [(0, 0)] * (keypoints.ndim - 1)
+    return np.pad(keypoints, pad_width, mode="edge")

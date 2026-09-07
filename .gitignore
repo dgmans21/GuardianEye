@@ -13,3 +13,7 @@ data/keypoints/
 *.npy
 
 .ipynb_checkpoints/
+
+# YOLO 사전학습 가중치 (ultralytics가 자동 다운로드, 용량 커서 git에 안 올림)
+*.pt
+

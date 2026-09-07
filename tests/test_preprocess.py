@@ -1,6 +1,10 @@
 import numpy as np
 
-from sentinelpose.data.preprocess import interpolate_missing_keypoints, normalize_by_bbox
+from sentinelpose.data.preprocess import (
+    interpolate_missing_keypoints,
+    normalize_by_bbox,
+    to_fixed_length,
+)
 
 
 def make_keypoints(xs, ys, confs):
@@ -54,3 +58,26 @@ def test_normalize_by_bbox_handles_degenerate_bbox():
     kp = np.array([[[5, 5], [5, 5]]], dtype=float)
     out = normalize_by_bbox(kp)
     assert np.isfinite(out).all()
+
+
+def test_to_fixed_length_passthrough_when_already_correct():
+    kp = np.zeros((30, 17, 2))
+    out = to_fixed_length(kp, target_len=30)
+    assert out.shape == (30, 17, 2)
+
+
+def test_to_fixed_length_center_crops_long_sequence():
+    # 0..89 프레임 인덱스를 값으로 채워서, 중앙 30프레임(30~59)이 남는지 확인
+    kp = np.arange(90).reshape(90, 1, 1).astype(float)
+    out = to_fixed_length(kp, target_len=30)
+    assert out.shape == (30, 1, 1)
+    assert out[0, 0, 0] == 30
+    assert out[-1, 0, 0] == 59
+
+
+def test_to_fixed_length_pads_short_sequence_with_edge_values():
+    kp = np.arange(29).reshape(29, 1, 1).astype(float)
+    out = to_fixed_length(kp, target_len=30)
+    assert out.shape == (30, 1, 1)
+    # 1프레임만 부족 -> 뒤쪽에 마지막 값(28)이 반복돼야 함
+    assert out[-1, 0, 0] == 28
