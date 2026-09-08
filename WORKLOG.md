@@ -199,9 +199,68 @@
 - **지금 규모(453개)에서 추가 증량은 불필요하다고 결론**: 늘릴 때마다 예상 못 한 부작용(swoon 중복 데이터, assault↔intrusion 신규 혼동)이 반복됐고, "더 늘리면 더 좋아진다"는 보장이 없음을 두 차례 확인함
 - assault↔intrusion(pulling) 혼동은 데이터 양의 문제가 아니라 **포즈 정보만으로는 원천적으로 구분이 애매한 케이스**(관절 움직임 자체가 유사)로 보임 → 포트폴리오에는 이를 "정직한 한계"로 문서화하는 방향으로 진행
 
-### 다음 할 일 (미착수) — 다음 세션
-- [ ] Day6: YOLOv8 tracker + 분류기 실시간 통합 파이프라인, Latency/FPS 측정
-- [ ] Day7: RAG 연동 (이상 이벤트 메타데이터 → 벡터DB 검색 → 매뉴얼 반환)
-- [ ] Day8: Streamlit/Gradio UI (비디오 재생+오버레이+타임라인+매뉴얼 팝업)
+## 2026-09-09 — Day6: 실시간 통합 파이프라인
+
+37. **`src/sentinelpose/realtime.py` 작성 — YOLOv8 tracker + 분류기 스트리밍 통합**
+    - track별로 최근 30프레임 키포인트를 버퍼링, 버퍼가 차면 매 프레임 분류기 실행
+    - 480p 60초 테스트 클립(swoon 101-1 세션, 실제 이벤트 구간 포함) 기준: **FPS 40.71, pose 평균 23.8ms/프레임, 분류기 평균 0.77ms/프레임** — 분류기 자체는 사실상 오버헤드 없음, 병목은 포즈 추정
+
+38. **중대 결함 발견: "정상" 클래스가 없어 평상시에도 강제로 이상행동 판정**
+    - 3클래스(assault/falldown/intrusion) 모델로 실시간 테스트한 결과, **평범하게 걷는 구간에서도 assault를 59% 확신도로 예측**, 심지어 **실제 falldown 이벤트 구간에서도 assault를 90%+로 잘못 예측**
+    - 원인: (1) 학습 클립은 전부 액션에 정확히 맞춰 트리밍된 이상적 조각이라 실전의 "애매하게 걸친 슬라이딩 윈도우"와 분포가 다름 (2) "정상" 클래스 자체가 없어 모델이 3개 중 하나를 강제로 골라야 함 (3) assault가 학습 데이터 60%를 차지해 애매하면 assault로 쏠림
+    - 사용자 지적: 이 문제를 안 고치면 Day7(RAG)이 무의미해짐(정상 상황에서도 계속 오탐 경보) → **필수 작업으로 격상**
+
+39. **`scripts/build_normal_clips.py` 작성 — 정상(normal) 클래스 데이터 확보**
+    - 추가 다운로드 없이 기존 원본 세션 영상만 사용: XML에 라벨된 모든 action 구간(±30프레임 마진)을 점유 구간으로 표시하고, 나머지 빈 구간에서 30프레임 윈도우를 90프레임 간격으로 세션당 최대 4개까지 샘플링
+    - 80개 세션에서 **320개 정상 클립** 확보 (원본 재사용이라 다운로드 시간 0)
+    - 키포인트 추출(GPU, 증분처리 — 기존 3클래스는 캐시 재사용, 신규 320개만 처리) → 검출 실패율이 다른 클래스보다 높음(사람이 아예 프레임 밖에 있는 구간 포함되어 있어 예상된 현상), **usable 191개**
+
+40. **4클래스(assault/falldown/intrusion/normal) 재학습**
+    - 데이터: assault 274 / falldown 95 / intrusion 84 / normal 191 = **총 644개**
+    - TemporalGRU: val 67.0% / test 61.9% (n=97). 다수 클래스 baseline이 4클래스라 42.3%로 낮아져서, **baseline 대비 실질 이득은 +19.6%p로 오히려 역대 최고** (숫자만 보면 낮아 보이지만 실제로는 가장 좋은 모델)
+
+41. **실시간 데모 재검증 — 문제 해결 확인**
+    - 같은 60초 테스트 클립으로 재실행: 평상시 구간에서 assault(0.371)와 normal(0.367)이 거의 동률로 균형잡힘 (이전 0.59 vs 0.26)
+    - **실제 falldown 이벤트 구간(frame 768~1068)에서 이제 "falldown"을 0.6 안팎으로 꾸준히 정확하게 예측** (이전엔 이 구간에서도 계속 assault 90%+였음) — 핵심 결함 해결 확인
+    - 남은 한계: 이벤트 시작 직전 전환 구간과 클립 맨 끝부분은 여전히 예측이 흔들림 — 완벽하진 않지만 핵심 오탐 문제는 해결됨
+
+### 완료 — Day7 준비: Qwen3-4B를 Ollama 로컬 서빙으로 세팅
+
+42. **로컬 Qwen 환경 확인**: 이전 프로젝트에서 Hugging Face 캐시에 Qwen3-4B(unsloth bnb-4bit, 3.4GB)가 받아져 있었음. Ollama는 미설치. 전용 conda 환경 `unsloth_env`(transformers, unsloth, torch 2.11+cu130)에서 사용 가능한 상태였음
+
+43. **Ollama 설치 (winget)** + **Qwen3-4B → GGUF 변환 → Ollama 등록**
+    - `winget install Ollama.Ollama`로 설치
+    - unsloth의 `save_pretrained_gguf()`로 변환 시도 중 이슈 2개 발생 및 해결:
+      - **이슈1**: `transformers 5.5.0`의 내부 리팩터링(`revert_weight_conversion`)이 특정 가중치 변환에 대해 `NotImplementedError` 발생 → 안정적인 4.x 최신판(`4.57.6`)으로 다운그레이드하여 해결
+      - **이슈2**: bnb-4bit로 이미 양자화된 모델은 GGUF 변환에 필요한 "16bit로 복원"이 불가능(`load_in_4bit=True`로 저장된 모델은 역양자화 정보가 없음) → **원본 16bit 리포지토리(`unsloth/Qwen3-4B`)를 별도로 받아서** 변환. GPU 8GB로는 bf16 4B 모델 로드가 빠듯해 `device_map="cpu"`로 로드(변환 도구인 llama.cpp 자체도 CPU 전용이라 GPU 불필요 작업이었음)
+    - 변환 완료: `Qwen3-4B.Q4_K_M.gguf`(2.4GB) + Ollama Modelfile 자동 생성 → `ollama create sentinelpose-qwen`으로 등록 성공
+    - 테스트 프롬프트로 정상 응답 확인. 이후 불필요해진 중간 산출물(변환용 16bit 원본 7.6GB + 중복 GGUF 2.4GB) 삭제로 약 10GB 회수
+    - **주의**: 등록된 모델은 파인튜닝 안 된 **베이스 Qwen3-4B**임 (첫 프로젝트의 파인튜닝된 adapter는 이 캐시에 없었음 — adapter_config.json 자체가 존재하지 않는 스냅샷이었음). GuardianEye의 사고 리포트 생성 용도로는 베이스 모델로 충분하다고 판단하고 진행
+
+### 완료 — Day7: RAG 연동
+
+44. **대응 매뉴얼 작성 (`data/manuals/{assault,falldown,intrusion}.md`)**
+    - 실제 공개된 "관제 담당자용 실시간 대응 매뉴얼"은 못 찾음(검색 결과는 대부분 "피해자가 사후에 취할 법적 절차" 위주 — 실시간 보안 대응 매뉴얼은 각 시설 내부 문서라 비공개인 것으로 판단)
+    - 대신 실제 검색으로 확인한 절차 요소(112/119 신고, CCTV 증거 보전, 진단서 등)를 반영해 직접 작성. 클래스당 "즉시 대응/신고 절차/사후 조치" 3섹션 구조로 통일
+
+45. **`src/sentinelpose/rag.py` 작성 — 경량 RAG 파이프라인**
+    - 문서 수가 적어(9개 청크) 별도 벡터DB 없이 `sentence-transformers`(한국어 모델 `jhgan/ko-sroberta-multitask`) 임베딩 + numpy 코사인 유사도로 직접 구현
+    - `retrieve_manual()`: 감지된 이벤트의 class_label로 먼저 필터링 후 검색 — 다른 클래스 매뉴얼이 섞여 나오는 것 방지
+    - `generate_report()`: 검색된 매뉴얼 + 이벤트 메타데이터를 Ollama(`sentinelpose-qwen`)에 프롬프트로 넣어 관제 담당자용 사고 리포트 생성. Qwen3의 `<think>` 추론 블록은 정규식으로 제거해 최종 리포트만 남김
+    - 설치 중 `sentence-transformers` import가 `torchaudio` DLL 로드 실패로 깨짐 → 텍스트 임베딩에 불필요한 `torchaudio` 제거로 해결
+
+46. **`scripts/test_rag.py`로 end-to-end 검증**
+    - 이벤트 `{event: falldown, time: ..., location: 지하주차장 B2}` 기준 검색 결과가 전부 falldown 섹션으로 정확히 필터링됨 (유사도 0.42~0.47)
+    - Qwen이 검색된 매뉴얼 내용(30초 관찰, 119 신고, 응급조치, 사후 기록)을 실제로 반영한 4문장 리포트를 정상 생성함을 확인
+    - 단위테스트 3개 추가(`parse_manual` 섹션 분리, `build_query` 필드 포함/누락 처리) — 전체 22개 테스트 통과
+
+### Day8 설계 논의 (착수는 다음 세션)
+- 현재 realtime.py/rag.py는 순수 백엔드(텍스트/CSV 출력)라 시각화 레이어가 별도로 필요하다는 점 확인
+- 계획: (1) OpenCV로 원본 영상 프레임에 스켈레톤+박스+라벨을 그린 "주석 영상" 생성 (신규 생성이 아니라 원본 위에 오버레이) (2) 영상 길이만큼 클래스별 색상 타임라인 바 (3) 타임라인 클릭 시 하단에 rag.py의 매뉴얼+Qwen 리포트 카드 표시
+- 데모 입력은 매번 업로드 대신 **미리 골라둔 샘플 클립을 드롭다운으로 선택**하는 방식으로 결정 (대용량 원본 업로드 비효율 방지)
+- **사용자 요청**: 화면에 표시할 라벨은 내부 클래스명(assault/falldown/intrusion/normal) 대신 **한글(폭행/낙상(실신)/침입/정상)**로 매핑해서 보여줄 것 — Day8 구현 시 반영 필요
+
+### 다음 할 일 (미착수)
+- [ ] Day8: Streamlit/Gradio UI 구현 (위 설계대로 — 주석 영상 + 타임라인 + 리포트 카드 + 한글 라벨 매핑)
 - [ ] 트리밍 전 원본 영상 중 일부(3~5개)는 Day 6/8 실시간 데모·UI용으로 별도 보존 여부 결정
-- [ ] README에 아키텍처 다이어그램, 의사결정 근거, Confusion Matrix, Latency 수치 정리 (Day9~10)
+- [ ] README에 아키텍처 다이어그램, 의사결정 근거, Confusion Matrix, Latency 수치, "정상 클래스 발견-해결" 스토리 정리 (Day9~10)

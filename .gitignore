@@ -17,3 +17,6 @@ data/keypoints/
 # YOLO 사전학습 가중치 (ultralytics가 자동 다운로드, 용량 커서 git에 안 올림)
 *.pt
 
+# unsloth이 GGUF 변환 시 로컬에 남기는 캐시 (프로젝트와 무관한 범용 코드)
+unsloth_compiled_cache/
+

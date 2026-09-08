@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 KEYPOINTS_DIR = ROOT / "data" / "keypoints"
 OUT_PATH = ROOT / "data" / "dataset.npz"
 
-CLASSES = ["assault", "falldown", "intrusion"]
+CLASSES = ["assault", "falldown", "intrusion", "normal"]
 CLASS_TO_IDX = {c: i for i, c in enumerate(CLASSES)}
 
 
